@@ -44,12 +44,13 @@
 - **Alternative rejected:** A simple `rate difference > -2%` check was too sensitive to sampling noise.
 - **If the constraint changes:** For small rates or clustered people, replace the normal bound with a method that models the actual sampling design.
 
-### No-winner rollback
+### No-winner and rollback rule
 
-- **What:** If no arm clears the primary significance threshold and guardrail bound, request 100% incumbent allocation through `/approvals`. The experiment stays `rollback_pending` until that proposal is applied.
-- **Why:** A finite run should not leave an inconclusive 50/50 split live indefinitely. The rollback requests the original configuration as a governed fallback, not as a statistical winner, and still requires approval. It can still hurt outcomes: the fresh public_01 and public_02 grades both marked the nw_kyc v3 rollback harmful on engagement.
-- **Alternative rejected:** Keeping the split forever leaves the test allocation live without a decision. Applying the rollback directly would bypass governance.
-- **If the constraint changes:** If policy explicitly allows long-running exploration, it can retain the split. If rollback is disallowed, the policy must set an approved stop rule and another safe fallback before launch.
+- **What:** Promote only when the candidate is statistically significant in the better direction on the primary KPI and clears the configured guardrail. A failed guardrail or a significantly worse primary result requests an approved rollback to the incumbent. When the primary is inconclusive and the guardrail passes, mark `complete_inconclusive`, audit `experiment_no_winner_split_retained` with full evidence, create no proposal, and keep the approved split.
+- **Why:** Inconclusive evidence is not evidence that the candidate is worse; a rollback itself changes production allocation and needs evidence. Neither arm is promoted without significance. The fresh grades nevertheless show the remaining risk: the approved nw_kyc incumbent rollback was harmful on engagement by −3.2% in public_01 and −2.1% in public_02.
+- **Known weakness:** A retained split is still a live, potentially poor allocation. A finite run can end while exploration remains in place, and the current controller has no bounded stopping policy for it.
+- **Alternative rejected:** Promoting either arm without significance overstates the evidence. Applying a rollback directly would bypass governance.
+- **If the constraint changes:** Define an approved, bounded exploration window and a statistically justified stop policy; continue to route any rollback through governance.
 
 ### Approval and stale-base handling
 
@@ -97,11 +98,11 @@
 
 **Why not call V2 a winner in Northwind KYC when engagement rose?**
 
-Northwind KYC's primary metric is pickup. The engagement improvement is its guardrail. The primary test and guardrail bound did not jointly authorize promotion, so the controller requests an approved rollback to the incumbent. The fresh grades marked nw_kyc v3 harmful on engagement in both public_01 (−3.2%) and public_02 (−1.9%), which shows that fallback also needs outcome review.
+Northwind KYC's primary metric is pickup. The controller promotes only if pickup is significantly better and the engagement guardrail passes. If pickup is inconclusive while the guardrail passes, it records `complete_inconclusive`, retains the split, and does not promote either arm. If the guardrail fails or pickup is significantly worse, it requests an approved rollback. The latest fresh grades mark the applied nw_kyc incumbent rollback harmful on engagement in public_01 (−3.2%) and public_02 (−2.1%); this shows that a rule-triggered, approved fallback can still worsen a measured outcome.
 
 **What happens when the experiment is inconclusive?**
 
-The controller requests an approved rollback to the incumbent and records `rollback_pending`. That does not say the incumbent won. It avoids leaving the 50/50 test allocation in place indefinitely. If the proposal is rejected or conflicts with a supervisor edit, no rollback is applied.
+If primary evidence is inconclusive and the guardrail passes, the controller records `experiment_no_winner_split_retained` with full arm counts, p-value, guardrail bound, and decision threshold; it marks `complete_inconclusive`, makes no proposal, and leaves the approved split in place. That retained split is a known weakness because exploration can continue through the end of a finite run. If the guardrail fails, or the candidate is significantly worse on the primary KPI, the controller requests a governed rollback and records it as pending until approval is applied. A rollback still does not mean the incumbent was a statistically proven winner.
 
 **What is the multiple-comparison correction?**
 
