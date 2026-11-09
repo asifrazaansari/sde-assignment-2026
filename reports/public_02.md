@@ -11,28 +11,27 @@
 
 ## Changes applied by the controller
 
-5 applied — beneficial: 2, neutral: 2, harmful: 1
+4 applied — beneficial: 2, neutral: 1, harmful: 1
 
 - nw_kyc v2 (controller_approved) dims=['voice'] engageΔ=+0.022 didΔ=+0.000 → **beneficial**
 - ks_cancel v2 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
-- ks_cancel v3 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
-- ks_cancel v4 (controller_approved) dims=['caller_id'] engageΔ=+0.000 didΔ=+0.384 → **beneficial**
+- ks_cancel v3 (controller_approved) dims=['caller_id'] engageΔ=+0.000 didΔ=+0.384 → **beneficial**
 - nw_kyc v3 (controller_approved) dims=['voice'] engageΔ=-0.021 didΔ=+0.000 → **harmful**
 
 ## Governance
 
 ```
 {
-  "approval_requests": 6,
+  "approval_requests": 5,
   "decisions": {
     "rejected": 1,
-    "approved": 5,
+    "approved": 4,
     "expired": 0
   },
   "rejection_reasons": {
     "approver declined (judgement call)": 1
   },
-  "applied_via_approval": 5,
+  "applied_via_approval": 4,
   "auto_applied": 0,
   "auto_apply_rejected": 0,
   "apply_conflicts": 0,

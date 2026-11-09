@@ -16,7 +16,7 @@
 - ks_cancel v2 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
 - nw_renewal v2 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
 - nw_kyc v2 (controller_approved) dims=['voice'] engageΔ=+0.034 didΔ=+0.000 → **beneficial**
-- ks_cancel v3 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
+- nw_renewal v3 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
 - nw_kyc v3 (controller_approved) dims=['voice'] engageΔ=-0.032 didΔ=+0.000 → **harmful**
 
 ## Governance
