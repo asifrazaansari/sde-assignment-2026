@@ -81,8 +81,8 @@ I chose a small, governed experiment and durable ingestion before adding more kn
 
 - **Accepted:** explainability before autonomy, minimal credit use, honest scale limits, and explicit cuts.
 - **Pushed back:** a positive aggregate result is not enough to claim the incidents are solved. Public_02 still reports a flagged caller ID and supervisor edits.
-- **Wrong claim:** no wrong policy claim was identified in this memo; I used the API as authority for the other memos' policy assertions.
-- **Reply:** “The loop spent zero LLM or validation credits and recorded each applied change in its own store. Public_02 ended +1.9% on concluded leads against baseline, but the caller-ID flag and supervisor edits were not fixed. At 10× volume the current SQLite footprint projects to about 25 GB and the five-day run to about 38.9 minutes. I would partition ingestion and move the event store before expanding autonomy.”
+- **Wrong claim:** “Credits are cheap here” understates the enforced budget. The scenario starts with 200 credits, `GET /sim/state` returns `credits_remaining`, and the simulator returns HTTP 402 when credits are exhausted. README constraint 7 says credits are finite and running out mid-incident is a failure.
+- **Reply:** “This run spent zero credits, which kept it within budget, but I did not build incident response. LLM and validation calls consume a finite balance, so I would reserve credits for incident work and expose the remaining balance in the on-call view. Public_02 ended +1.9% on concluded leads against baseline, but the caller-ID flag and supervisor edits were not fixed. At 10× volume the current SQLite footprint projects to about 25 GB and the five-day run to about 38.9 minutes. I would partition ingestion and move the event store before expanding autonomy.”
 
 ## 4. Architecture
 
