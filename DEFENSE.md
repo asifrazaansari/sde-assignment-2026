@@ -44,12 +44,12 @@
 - **Alternative rejected:** A simple `rate difference > -2%` check was too sensitive to sampling noise.
 - **If the constraint changes:** For small rates or clustered people, replace the normal bound with a method that models the actual sampling design.
 
-### Inconclusive results stay split
+### No-winner rollback
 
-- **What:** If no primary winner clears the guardrail, keep the approved 50/50 allocation and do not promote either arm.
-- **Why:** The evidence does not justify a move to either endpoint, and reverting can itself harm a guardrail as public runs showed.
-- **Alternative rejected:** Automatically restoring the incumbent treats lack of evidence as evidence for the incumbent.
-- **If the constraint changes:** A policy that forbids prolonged exploration needs a pre-approved stop rule and a defined safe fallback before launch.
+- **What:** If no arm clears the primary significance threshold and guardrail bound, request 100% incumbent allocation through `/approvals`. The experiment stays `rollback_pending` until that proposal is applied.
+- **Why:** A finite run should not leave an inconclusive 50/50 split live indefinitely. The rollback requests the original configuration as a governed fallback, not as a statistical winner, and still requires approval. It can still hurt outcomes: the fresh public_01 and public_02 grades both marked the nw_kyc v3 rollback harmful on engagement.
+- **Alternative rejected:** Keeping the split forever leaves the test allocation live without a decision. Applying the rollback directly would bypass governance.
+- **If the constraint changes:** If policy explicitly allows long-running exploration, it can retain the split. If rollback is disallowed, the policy must set an approved stop rule and another safe fallback before launch.
 
 ### Approval and stale-base handling
 
@@ -74,20 +74,27 @@
 
 ### Audit and impact score
 
-- **What:** Decisions record rationale, evidence, approval, and outcome; the proposal score is zero until observed arms exist.
-- **Why:** This separates a real measured effect from an untested hypothesis and gives a queryable explanation.
+- **What:** Decisions record rationale, evidence, approval, and outcome. Exploratory and rollback proposals score zero; a promotion proposal's submitted discounted rate-difference score is copied into its audit evidence.
+- **Why:** This separates an untested hypothesis from a measured promotion proxy and makes the submitted score queryable beside the decision.
 - **Alternative rejected:** A made-up lift percentage would rank approvals with false precision.
-- **If the constraint changes:** Build a calibrated outcome model and validate it prospectively before using the score to rank a queue.
+- **If the constraint changes:** If reviewers need rollback urgency ranked too, define a direction-aware urgency metric and validate it before including rollback requests in the same score.
+
+### Crash recovery checkpoints
+
+- **What:** The recovery script starts a fresh public_01 simulator, kills the controller after a pending proposal is persisted, restarts with the same database, and tries to kill again when an approval is approved but not yet applied.
+- **Why:** The first kill checks durable proposal and cursor recovery at a real approval boundary. The second would exercise the uncertain-apply boundary if the simulator exposes a long enough interval.
+- **Alternative rejected:** Killing after a fixed delay can occur before any approval exists and proves little about approval recovery.
+- **If the constraint changes:** If controller or simulator process isolation changes, preserve simulator memory during controller restart or use a deterministic fault-injection hook; do not claim an unreachable checkpoint was tested.
 
 ## Likely live-review questions
 
 **Why not call V2 a winner in Northwind KYC when engagement rose?**
 
-Northwind KYC's primary metric is pickup. The engagement improvement is its guardrail. The primary test and guardrail bound did not jointly authorize promotion, so the controller kept the approved split and did not claim a winner.
+Northwind KYC's primary metric is pickup. The engagement improvement is its guardrail. The primary test and guardrail bound did not jointly authorize promotion, so the controller requests an approved rollback to the incumbent. The fresh grades marked nw_kyc v3 harmful on engagement in both public_01 (−3.2%) and public_02 (−1.9%), which shows that fallback also needs outcome review.
 
-**Why keep an inconclusive split live?**
+**What happens when the experiment is inconclusive?**
 
-Because neither arm has evidence to justify a move to 100%. In public_01, restoring the original arm after an inconclusive result produced a harmful grade on engagement. Production should set a maximum exploration duration and safe fallback before the test begins.
+The controller requests an approved rollback to the incumbent and records `rollback_pending`. That does not say the incumbent won. It avoids leaving the 50/50 test allocation in place indefinitely. If the proposal is rejected or conflicts with a supervisor edit, no rollback is applied.
 
 **What is the multiple-comparison correction?**
 

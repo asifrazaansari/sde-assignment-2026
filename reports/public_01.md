@@ -4,30 +4,33 @@
 
 | workflow | conclusion rate | Δ | pickup | Δ | engagement | Δ | engagement gap captured | hallucinated calls (base) |
 |---|---|---|---|---|---|---|---|---|
-| ks_cancel | 0.349 | +2.3% | 0.242 | -1.1% | 0.506 | +2.8% | 0% | 62 (57) |
-| nw_kyc | 0.379 | +3.4% | 0.245 | +1.2% | 0.609 | +1.9% | 14% | 17 (21) |
-| nw_renewal | 0.417 | +0.3% | 0.262 | -1.0% | 0.550 | +1.5% | 0% | 44 (54) |
-| ALL | 0.378 | +1.8% | 0.249 | -0.6% | 0.541 | +2.2% | 3% | 123 (132) |
+| ks_cancel | 0.344 | +0.6% | 0.241 | -1.5% | 0.500 | +1.7% | 0% | 51 (57) |
+| nw_kyc | 0.375 | +2.4% | 0.241 | -0.2% | 0.612 | +2.5% | 9% | 19 (21) |
+| nw_renewal | 0.412 | -1.1% | 0.260 | -1.6% | 0.547 | +0.9% | 0% | 42 (54) |
+| ALL | 0.373 | +0.3% | 0.248 | -1.3% | 0.538 | +1.6% | 2% | 112 (132) |
 
 ## Changes applied by the controller
 
-3 applied — neutral: 2, beneficial: 1
+6 applied — neutral: 4, beneficial: 1, harmful: 1
 
 - ks_cancel v2 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
 - nw_renewal v2 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
 - nw_kyc v2 (controller_approved) dims=['voice'] engageΔ=+0.034 didΔ=+0.000 → **beneficial**
+- ks_cancel v3 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
+- nw_renewal v3 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
+- nw_kyc v3 (controller_approved) dims=['voice'] engageΔ=-0.032 didΔ=+0.000 → **harmful**
 
 ## Governance
 
 ```
 {
-  "approval_requests": 3,
+  "approval_requests": 6,
   "decisions": {
-    "approved": 3,
+    "approved": 6,
     "expired": 0
   },
   "rejection_reasons": {},
-  "applied_via_approval": 3,
+  "applied_via_approval": 6,
   "auto_applied": 0,
   "auto_apply_rejected": 0,
   "apply_conflicts": 0,

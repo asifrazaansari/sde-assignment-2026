@@ -1,12 +1,12 @@
 # Outcome-First Agent Loop: Submission
 
-**Name:** Asif Raza Ansari · **Date:** 2026-11-09 · **Hours actually spent:** about 0.5 hours in this recorded session · **Language / storage:** Python 3 / SQLite WAL
+**Name:** Asif Raza Ansari · **Date:** 2026-11-09 · **Hours actually spent:** 4+ hours today · **Language / storage:** Python 3 / SQLite WAL
 
 ## 0. TL;DR
 
 The controller ingests live chunks idempotently, runs one governed voice experiment per workflow, and keeps its own SQLite audit.
-Public_01 finished at +1.8% concluded leads versus baseline; public_02 finished at +1.9%.
-Three public_01 changes and two public_02 changes were applied; none were graded harmful.
+Public_01 finished at +0.3% concluded leads versus baseline; public_02 finished at +2.2%.
+Six public_01 changes and four public_02 changes were applied. Each run had one harmful applied change, both on nw_kyc v3.
 The controller does not respond to caller-ID or hallucination incidents, and it does not build call-time optimization or a supervisor UI.
 
 ## 1. Assumptions
@@ -82,7 +82,7 @@ I chose a small, governed experiment and durable ingestion before adding more kn
 - **Accepted:** explainability before autonomy, minimal credit use, honest scale limits, and explicit cuts.
 - **Pushed back:** a positive aggregate result is not enough to claim the incidents are solved. Public_02 still reports a flagged caller ID and supervisor edits.
 - **Wrong claim:** “Credits are cheap here” understates the enforced budget. The scenario starts with 200 credits, `GET /sim/state` returns `credits_remaining`, and the simulator returns HTTP 402 when credits are exhausted. README constraint 7 says credits are finite and running out mid-incident is a failure.
-- **Reply:** “This run spent zero credits, which kept it within budget, but I did not build incident response. LLM and validation calls consume a finite balance, so I would reserve credits for incident work and expose the remaining balance in the on-call view. Public_02 ended +1.9% on concluded leads against baseline, but the caller-ID flag and supervisor edits were not fixed. At 10× volume the current SQLite footprint projects to about 25 GB and the five-day run to about 38.9 minutes. I would partition ingestion and move the event store before expanding autonomy.”
+- **Reply:** “This run spent zero credits, which kept it within budget, but I did not build incident response. LLM and validation calls consume a finite balance, so I would reserve credits for incident work and expose the remaining balance in the on-call view. Public_02 ended +2.2% on concluded leads against baseline, but the caller-ID flag and supervisor edits were not fixed. At 10× volume the current SQLite footprint projects to about 25 GB and the five-day run to about 38.9 minutes. I would partition ingestion and move the event store before expanding autonomy.”
 
 ## 4. Architecture
 
@@ -142,7 +142,7 @@ At 10×, linear projections put the five-day run near 38.9 minutes and storage n
 
 ## 9. Reliability
 
-The script [scripts/crash_recovery.sh](scripts/crash_recovery.sh) starts a fresh public_01 simulator and kills the controller after observing a pending approval. It restarts with the same database while the simulator stays alive. On the recorded run, all three proposals reached terminal applied status, there were three unique approval IDs and zero duplicate applies, the cursor advanced from 10 at the first kill to 392 at completion, and the simulator finished. The approved-but-unapplied kill point was not observed before public_01 completed, as recorded in [reports/crash_recovery.log](reports/crash_recovery.log). Tests verify duplicate event IDs are ignored, the cursor survives reopen, a pending proposal survives reopen, and reconciliation does not create a second proposal.
+The script [scripts/crash_recovery.sh](scripts/crash_recovery.sh) starts a fresh public_01 simulator and kills the controller after observing a pending approval. It restarts with the same database while the simulator stays alive. On the recorded run, all three proposals reached terminal applied status, there were three unique approval IDs and zero duplicate applies, the cursor advanced from 12 at the first kill to 392 at completion, and the simulator finished. The approved-but-unapplied kill point was not observed before public_01 completed, as recorded in [reports/crash_recovery.log](reports/crash_recovery.log). Tests verify duplicate event IDs are ignored, the cursor survives reopen, a pending proposal survives reopen, and reconciliation does not create a second proposal.
 
 GETs and non-advance POSTs retry network errors and 5xx with capped backoff. Advance is not blindly retried: after an uncertain result, the controller checks `/sim/state` and ingests any chunk already produced. Ordinary 4xx errors stop the run; finished, stale, duplicate proposal, and lapsed statuses have explicit handling.
 
@@ -179,23 +179,23 @@ Page on a cursor that stops advancing, repeated 5xx retries, disk near full, an 
 
 | workflow | conclusion rate | Δ | pickup rate | Δ | engagement rate | Δ |
 |---|---:|---:|---:|---:|---:|---:|
-| ks_cancel | 34.9% | +2.3% | 24.2% | -1.1% | 50.6% | +2.8% |
-| nw_kyc | 37.9% | +3.4% | 24.5% | +1.2% | 60.9% | +1.9% |
-| nw_renewal | 41.7% | +0.3% | 26.2% | -1.0% | 55.0% | +1.5% |
-| ALL | 37.8% | +1.8% | 24.9% | -0.6% | 54.1% | +2.2% |
+| ks_cancel | 34.4% | +0.6% | 24.1% | -1.5% | 50.0% | +1.7% |
+| nw_kyc | 37.5% | +2.4% | 24.1% | -0.2% | 61.2% | +2.5% |
+| nw_renewal | 41.2% | -1.1% | 26.0% | -1.6% | 54.7% | +0.9% |
+| ALL | 37.3% | +0.3% | 24.8% | -1.3% | 53.8% | +1.6% |
 
-Three changes were applied: one beneficial and two neutral. No incident was present. The lift is modest and does not capture much hidden engagement headroom.
+Six changes were applied: one beneficial, four neutral, and one harmful. `nw_kyc v3` was harmful on engagement (−3.2%). No incident was present. The aggregate conclusion lift was +0.3%.
 
 ### public_02
 
 | workflow | conclusion rate | Δ | pickup rate | Δ | engagement rate | Δ |
 |---|---:|---:|---:|---:|---:|---:|
-| ks_cancel | 24.3% | +3.3% | 18.1% | -0.1% | 48.1% | +2.9% |
-| nw_kyc | 38.5% | +3.1% | 24.1% | +2.9% | 60.9% | +0.1% |
-| nw_renewal | 43.4% | +0.3% | 26.5% | +0.9% | 55.2% | -0.5% |
-| ALL | 33.7% | +1.9% | 22.1% | +0.9% | 53.7% | +0.9% |
+| ks_cancel | 24.6% | +4.4% | 18.3% | +1.3% | 47.9% | +2.5% |
+| nw_kyc | 37.3% | -0.2% | 23.8% | +1.5% | 60.0% | -1.4% |
+| nw_renewal | 44.1% | +1.8% | 26.4% | +0.5% | 56.1% | +1.2% |
+| ALL | 33.8% | +2.2% | 22.2% | +1.0% | 53.8% | +1.0% |
 
-Two changes were applied: one beneficial and one neutral; one request was rejected by the simulated approver. The caller-ID and supervisor-edit incidents were not fixed. No applied change was graded harmful.
+Four changes were applied: one beneficial, two neutral, and one harmful. `nw_kyc v3` was harmful on engagement (−1.9%). One request was rejected by the simulated approver. The caller-ID and supervisor-edit incidents were not fixed.
 
 ## 12. Trade-offs & rejected alternatives
 
