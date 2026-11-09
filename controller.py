@@ -406,7 +406,11 @@ class Controller:
                     proposed = self.apply_dimensions(fresh["config"], old_body["proposed_config"], changed)
                     self.store.audit(row["workflow_id"], "stale_approval", "Approval was based on an old version; re-proposed the same dimensions on the supervisor's current config.",
                                      {"approval_id": row["approval_id"], "new_base": fresh["version"]}, self.last_ts)
-                    self.create_proposal(wf, fresh, proposed, old_body["change_summary"], old_body["rationale"], {})
+                    new_id = self.create_proposal(wf, fresh, proposed, old_body["change_summary"], old_body["rationale"], {})
+                    exp = self.store.get(f"experiment:{row['workflow_id']}")
+                    if exp and exp.get("proposal_id") == row["proposal_id"] and new_id:
+                        exp["proposal_id"] = new_id
+                        self.store.set(f"experiment:{row['workflow_id']}", exp)
                     continue
                 if response.status_code == 410:
                     status = "lapsed"
@@ -513,14 +517,30 @@ class Controller:
                     "guardrail_delta": round(guard_delta, 4),
                     "guardrail_lower_bound_95pct_one_sided": round(guardrail_lower_bound, 4),
                     "guardrail_floor": -guardrail_drop}
-        if pvalue >= threshold or guardrail_lower_bound < -guardrail_drop:
-            # An inconclusive result is not evidence that the incumbent is better.
-            # Keep the already-approved balanced split live; never manufacture a winner.
-            exp["phase"] = "complete_inconclusive"
+        primary_inconclusive = pvalue >= threshold
+        guardrail_failed = guardrail_lower_bound < -guardrail_drop
+        if primary_inconclusive or guardrail_failed:
+            reasons = []
+            if primary_inconclusive:
+                reasons.append("primary_not_significant")
+            if guardrail_failed:
+                reasons.append("guardrail_bound_failed")
+            evidence["no_winner_reason"] = reasons
+            current = self.current_config(wid)
+            cfg = copy.deepcopy(current["config"])
+            cfg.setdefault("allocations", {}).setdefault("default", {})["voice"] = {a: 1.0}
+            result = self.create_proposal(
+                wf, current, cfg,
+                f"Restore incumbent voice {a} after the experiment produced no promotable winner.",
+                "No candidate cleared both the primary significance threshold and guardrail bound; request approval to restore the incumbent voice allocation.",
+                {})
+            exp["phase"] = "rollback_pending" if result else "rollback_not_submitted"
+            exp["proposal_id"] = result
             self.store.set(f"experiment:{wid}", exp)
-            self.store.audit(wid, "experiment_no_winner",
-                             "No arm cleared both the fixed significance threshold and guardrail; the approved 50/50 split remains live without promotion.",
-                             evidence, self.last_ts, outcome="inconclusive_split_retained")
+            self.store.audit(wid, "experiment_no_winner_rollback",
+                             "No candidate cleared both the primary significance threshold and guardrail bound; the incumbent rollback was sent through the standard approval path.",
+                             evidence, self.last_ts,
+                             outcome="rollback_pending" if result else "rollback_not_submitted")
             return
         winner = b if better is rb else a
         current = self.current_config(wid)

@@ -95,3 +95,64 @@ def test_reconcile_does_not_recreate_pending_proposal_after_reopen(tmp_path):
     assert rows[0]["proposal_id"] == "stable-id"
     assert rows[0]["approval_id"] == "apr_1"
     assert rows[0]["status"] == "pending"
+
+
+def _controller_with_experiment(tmp_path, v1_connected, v1_engaged, v2_connected, v2_engaged):
+    controller = Controller("http://simulator.invalid", str(tmp_path / "controller.sqlite3"))
+    controller.last_ts = "2026-01-01T12:00:00+05:30"
+    controller.store.set("experiment:wf", {
+        "phase": "running", "incumbent": "V1", "candidate": "V2", "start_version": 2,
+        "base_version": 1, "proposal_id": "split-proposal",
+    })
+    events = []
+    event_id = 0
+    for voice, connected_n, engaged_n in (
+        ("V1", v1_connected, v1_engaged), ("V2", v2_connected, v2_engaged)
+    ):
+        for i in range(max(1000, connected_n)):
+            events.append(json.dumps({
+                "event_id": event_id, "type": "call", "workflow_id": "wf",
+                "cohort_id": "default", "config_version": 2,
+                "variant": {"voice": voice}, "connected": i < connected_n,
+                "engaged": i < engaged_n,
+            }))
+            event_id += 1
+    controller.store.add_chunk(1, events)
+    controller.current_config = lambda wid: {
+        "version": 2,
+        "config": {"allocations": {"default": {"voice": {"V1": 0.5, "V2": 0.5}}}},
+    }
+    captured = {}
+
+    def fake_create_proposal(wf, current, proposed, summary, why, evidence):
+        captured.update({"proposed": proposed, "summary": summary, "why": why, "evidence": evidence})
+        return "rollback-proposal"
+
+    controller.create_proposal = fake_create_proposal
+    wf = {"workflow_id": "wf", "objective": {
+        "primary": "engagement_rate", "guardrail": {"pickup_rate_max_drop": 0.02}
+    }}
+    return controller, wf, captured
+
+
+def _assert_rollback_requested(controller, wf, captured, expected_reason):
+    controller.evaluate_experiment(wf)
+    exp = controller.store.get("experiment:wf")
+    assert exp["phase"] == "rollback_pending"
+    assert exp["proposal_id"] == "rollback-proposal"
+    assert captured["proposed"]["allocations"]["default"]["voice"] == {"V1": 1.0}
+    row = controller.store.db.execute(
+        "SELECT evidence FROM decisions WHERE action='experiment_no_winner_rollback'").fetchone()
+    assert expected_reason in json.loads(row[0])["no_winner_reason"]
+
+
+def test_inconclusive_experiment_proposes_incumbent_rollback(tmp_path):
+    controller, wf, captured = _controller_with_experiment(
+        tmp_path, v1_connected=500, v1_engaged=250, v2_connected=500, v2_engaged=250)
+    _assert_rollback_requested(controller, wf, captured, "primary_not_significant")
+
+
+def test_guardrail_failure_proposes_incumbent_rollback(tmp_path):
+    controller, wf, captured = _controller_with_experiment(
+        tmp_path, v1_connected=900, v1_engaged=540, v2_connected=700, v2_engaged=600)
+    _assert_rollback_requested(controller, wf, captured, "guardrail_bound_failed")
