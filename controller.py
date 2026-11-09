@@ -847,12 +847,13 @@ class Controller:
             return
         better, worse = (rb, ra) if rb["primary_success"] / rb["primary_n"] > ra["primary_success"] / ra["primary_n"] else (ra, rb)
         pvalue = two_proportion_pvalue(better["primary_success"], better["primary_n"], worse["primary_success"], worse["primary_n"])
-        guard_delta = (better["guardrail_success"] / better["guardrail_n"] -
-                       worse["guardrail_success"] / worse["guardrail_n"])
-        guard_rate_a = better["guardrail_success"] / better["guardrail_n"]
-        guard_rate_b = worse["guardrail_success"] / worse["guardrail_n"]
-        guard_se = math.sqrt(guard_rate_a * (1 - guard_rate_a) / better["guardrail_n"] +
-                             guard_rate_b * (1 - guard_rate_b) / worse["guardrail_n"])
+        guard_rate_incumbent = ra["guardrail_success"] / ra["guardrail_n"]
+        guard_rate_candidate = rb["guardrail_success"] / rb["guardrail_n"]
+        guard_delta = guard_rate_candidate - guard_rate_incumbent
+        guard_se = math.sqrt(
+            guard_rate_incumbent * (1 - guard_rate_incumbent) / ra["guardrail_n"] +
+            guard_rate_candidate * (1 - guard_rate_candidate) / rb["guardrail_n"]
+        )
         # Require the full confidence bound to clear the business margin, not just a noisy point estimate.
         guardrail_lower_bound = guard_delta - GUARDRAIL_Z * guard_se
         threshold = ALPHA / max(1, family_size)

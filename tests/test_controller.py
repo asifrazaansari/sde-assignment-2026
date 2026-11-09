@@ -98,7 +98,8 @@ def test_reconcile_does_not_recreate_pending_proposal_after_reopen(tmp_path):
     assert rows[0]["status"] == "pending"
 
 
-def _controller_with_experiment(tmp_path, v1_connected, v1_engaged, v2_connected, v2_engaged):
+def _controller_with_experiment(tmp_path, v1_connected, v1_engaged, v2_connected, v2_engaged,
+                                primary="engagement_rate"):
     controller = Controller("http://simulator.invalid", str(tmp_path / "controller.sqlite3"))
     controller.last_ts = "2026-01-01T12:00:00+05:30"
     controller.store.set("experiment:wf", {
@@ -127,11 +128,12 @@ def _controller_with_experiment(tmp_path, v1_connected, v1_engaged, v2_connected
 
     def fake_create_proposal(wf, current, proposed, summary, why, evidence):
         captured.update({"proposed": proposed, "summary": summary, "why": why, "evidence": evidence})
-        return "rollback-proposal"
+        return "test-proposal"
 
     controller.create_proposal = fake_create_proposal
+    guardrail_name = "pickup_rate" if primary == "engagement_rate" else "engagement_rate"
     wf = {"workflow_id": "wf", "objective": {
-        "primary": "engagement_rate", "guardrail": {"pickup_rate_max_drop": 0.02}
+        "primary": primary, "guardrail": {f"{guardrail_name}_max_drop": 0.02}
     }}
     return controller, wf, captured
 
@@ -140,7 +142,7 @@ def _assert_rollback_requested(controller, wf, captured, expected_reason):
     controller.evaluate_experiment(wf)
     exp = controller.store.get("experiment:wf")
     assert exp["phase"] == "rollback_pending"
-    assert exp["proposal_id"] == "rollback-proposal"
+    assert exp["proposal_id"] == "test-proposal"
     assert captured["proposed"]["allocations"]["default"]["voice"] == {"V1": 1.0}
     row = controller.store.db.execute(
         "SELECT evidence FROM decisions WHERE action='experiment_no_winner_rollback'").fetchone()
@@ -165,16 +167,58 @@ def test_inconclusive_experiment_keeps_split_without_proposal(tmp_path):
     assert evidence["guardrail_lower_bound_95pct_one_sided"] >= evidence["guardrail_floor"]
 
 
+def test_pickup_incumbent_noise_and_better_candidate_engagement_retains_split(tmp_path):
+    controller, wf, captured = _controller_with_experiment(
+        tmp_path, v1_connected=620, v1_engaged=500, v2_connected=610, v2_engaged=610,
+        primary="pickup_rate")
+    controller.evaluate_experiment(wf)
+
+    exp = controller.store.get("experiment:wf")
+    assert exp["phase"] == "complete_inconclusive"
+    assert exp["proposal_id"] == "split-proposal"
+    assert captured == {}
+    assert controller.store.db.execute(
+        "SELECT count(*) FROM proposals").fetchone()[0] == 0
+    row = controller.store.db.execute(
+        "SELECT evidence FROM decisions WHERE action='experiment_no_winner_split_retained'").fetchone()
+    evidence = json.loads(row[0])
+    assert evidence["primary"] == "pickup_rate"
+    assert evidence["guardrail"] == "engagement_rate"
+    assert evidence["p_value"] >= evidence["alpha"]
+    assert evidence["guardrail_delta"] > 0
+    assert evidence["guardrail_lower_bound_95pct_one_sided"] >= evidence["guardrail_floor"]
+
+
 def test_guardrail_failure_proposes_incumbent_rollback(tmp_path):
     controller, wf, captured = _controller_with_experiment(
-        tmp_path, v1_connected=900, v1_engaged=540, v2_connected=700, v2_engaged=600)
+        tmp_path, v1_connected=700, v1_engaged=600, v2_connected=700, v2_engaged=450,
+        primary="pickup_rate")
     _assert_rollback_requested(controller, wf, captured, "guardrail_bound_failed")
+    row = controller.store.db.execute(
+        "SELECT evidence FROM decisions WHERE action='experiment_no_winner_rollback'").fetchone()
+    evidence = json.loads(row[0])
+    assert evidence["guardrail_delta"] < evidence["guardrail_floor"]
+    assert evidence["guardrail_lower_bound_95pct_one_sided"] < evidence["guardrail_floor"]
 
 
 def test_significantly_worse_candidate_proposes_incumbent_rollback(tmp_path):
     controller, wf, captured = _controller_with_experiment(
         tmp_path, v1_connected=900, v1_engaged=600, v2_connected=900, v2_engaged=450)
     _assert_rollback_requested(controller, wf, captured, "candidate_significantly_worse")
+
+
+def test_significantly_better_candidate_with_passing_guardrail_proposes_promotion(tmp_path):
+    controller, wf, captured = _controller_with_experiment(
+        tmp_path, v1_connected=1800, v1_engaged=1200, v2_connected=1800, v2_engaged=1500)
+    controller.evaluate_experiment(wf)
+
+    exp = controller.store.get("experiment:wf")
+    assert exp["phase"] == "promotion_pending"
+    assert exp["proposal_id"] == "test-proposal"
+    assert captured["summary"] == "Promote voice V2 after a population experiment."
+    assert captured["proposed"]["allocations"]["default"]["voice"] == {"V2": 1.0}
+    assert captured["evidence"]["p_value"] < captured["evidence"]["alpha"]
+    assert captured["evidence"]["guardrail_lower_bound_95pct_one_sided"] >= captured["evidence"]["guardrail_floor"]
 
 
 def _caller_id_controller(tmp_path, windows):
