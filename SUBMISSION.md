@@ -1,4 +1,4 @@
-# Outcome-First Agent Loop — Submission
+# Outcome-First Agent Loop: Submission
 
 **Name:** Asif Raza Ansari · **Date:** 2026-11-09 · **Hours actually spent:** about 0.5 hours in this recorded session · **Language / storage:** Python 3 / SQLite WAL
 
@@ -42,47 +42,47 @@ I chose a small, governed experiment and durable ingestion before adding more kn
 
 ## 3. Stakeholders
 
-### 01 — Sales
+### 01: Sales
 
 - **Accepted:** speed where evidence is ready, and a clear per-workflow outcome summary.
 - **Pushed back:** pickup and engagement cannot be blended. A persuasive prompt does not transfer between clients without validation and approval.
 - **Wrong claim:** Kestrel does not permit every change by auto-apply. Its API policy limits dimensions and caps distribution shift. Northwind KYC has `auto_apply.enabled: false`; renewal only allows schedule and caller ID.
 - **Reply:** “I can show a separate pickup and engagement result for each workflow, with the business outcome above them. The live policy does not permit auto-apply for Northwind KYC and limits Kestrel to specific dimensions and a small shift. This controller uses human approval for voice experiments. I will not reuse another client's prompt without validation evidence and the right approval.”
 
-### 02 — Northwind Compliance
+### 02: Northwind Compliance
 
 - **Accepted:** human approval for customer-facing voice changes, validation evidence for prompts, and a durable record of config version and call variant.
 - **Pushed back:** no auto-apply latitude is assumed for KYC. The workflow API says KYC auto-apply is disabled, even for timing or caller ID. Renewal permits only schedule and caller ID.
 - **Wrong claim:** the memo's operational latitude cannot be generalized to all Northwind workflows; the per-workflow API policy is narrower for KYC.
 - **Reply:** “Voice changes go through `/approvals`. The call event stores its workflow, config version, cohort, and actual variant; the proposal and audit record link the reason and approval. KYC policy has auto-apply disabled, so I will route any KYC change through approval. Renewal's permitted automatic dimensions are schedule and caller ID only.”
 
-### 03 — Platform / SRE
+### 03: Platform / SRE
 
 - **Accepted:** idempotent ingestion, a kill/restart demonstration, and operational numbers that distinguish measured performance from estimates.
 - **Pushed back:** this take-home uses one local SQLite WAL file; it does not claim to be a production HA database. Public_03 was measured on the available macOS host, not the requested 4-vCPU Linux target.
 - **Wrong claim:** none of the SRE constraints was contradicted by the API. The 10-minute target still needs a target-host measurement.
-- **Reply:** “The controller stores chunk and event cursors transactionally and reconciles approvals after restart. The public_03 run processed 4.2 million live events in 245 seconds with 555 MiB peak RSS on this host. I have not certified that result on the target Linux box. Before production, I would move event storage to an operated database and add disk, lag, and retry alerts.”
+- **Reply:** “The controller stores chunk and event cursors transactionally and reconciles approvals after restart. The public_03 run processed 4,200,084 live events in 233.29 seconds with 612,532,224 bytes peak RSS, about 584 MiB, on the available macOS host. I have not certified that result on the requested 4-vCPU Linux target. Before production, I would move event storage to an operated database and add disk, lag, and retry alerts.”
 
-### 04 — Kestrel Operations Supervisor
+### 04: Kestrel Operations Supervisor
 
 - **Accepted:** no Kestrel requests before 11:00, at most one normal experiment request per workflow per day, approval before any change, and never overwriting a same-dimension supervisor edit.
 - **Pushed back:** the API permits four requests per 24 hours, but the controller voluntarily stays below the supervisor's requested two. There is no consolidated screen in this scope.
 - **Wrong claim:** the API policy does not enforce a two-request limit; that is the supervisor's preference, which the controller honors. The API permits limited auto-apply but the controller chooses approval for voice.
 - **Reply:** “I will submit Kestrel requests at or after 11:00 and keep the normal cadence below two a day. Voice changes wait for approval. If your edit touches the same dimension as a queued or stale proposal, I abandon that proposal. This version has a SQLite audit query rather than a screen; a single read-only supervisor view is a next step.”
 
-### 05 — Product
+### 05: Product
 
 - **Accepted:** separate KPIs, the server-reported cohort ID, population thresholds, evidence from calls that actually ran, and workflow-local promotion.
 - **Pushed back:** call-time, caller-ID health, and a single consolidated UI are not in the floor implementation.
 - **Wrong claim:** the API models `expired` as a distinct lifecycle status, not `rejected`. The controller treats it as terminal and creates a fresh proposal with a new ID and current config when appropriate.
 - **Reply:** “Pickup and engagement remain separate, and every experiment uses the cohort ID reported on the call. The decision uses only calls observed on that config version. An expired approval has its own API status; I retire it and create a fresh proposal rather than reusing its ID or stale base. Promotion stays within the workflow.”
 
-### 06 — CTO
+### 06: CTO
 
 - **Accepted:** explainability before autonomy, minimal credit use, honest scale limits, and explicit cuts.
 - **Pushed back:** a positive aggregate result is not enough to claim the incidents are solved. Public_02 still reports a flagged caller ID and supervisor edits.
 - **Wrong claim:** no wrong policy claim was identified in this memo; I used the API as authority for the other memos' policy assertions.
-- **Reply:** “The loop spent zero LLM or validation credits and recorded each applied change in its own store. Public_02 ended +1.9% on concluded leads against baseline, but the caller-ID flag and supervisor edits were not fixed. At 10× volume the current SQLite footprint projects to about 25 GB and the five-day run to about 41 minutes. I would partition ingestion and move the event store before expanding autonomy.”
+- **Reply:** “The loop spent zero LLM or validation credits and recorded each applied change in its own store. Public_02 ended +1.9% on concluded leads against baseline, but the caller-ID flag and supervisor edits were not fixed. At 10× volume the current SQLite footprint projects to about 25 GB and the five-day run to about 38.9 minutes. I would partition ingestion and move the event store before expanding autonomy.”
 
 ## 4. Architecture
 
@@ -135,9 +135,9 @@ No hallucination detector, prompt suggestion, prompt validation, or caller-ID he
 
 ## 8. Scale
 
-See [reports/public_03_load.md](reports/public_03_load.md). The final measured run ingested 4,200,084 live events at 91,872 events/second during fetch and insert, used 581,697,536 bytes peak RSS, and took 245.4 seconds end to end (49.1 seconds per simulated day). The maximum observed event-to-controller lag was 27 simulated minutes. The SQLite file reached 2.5 GB.
+See [reports/public_03_load.md](reports/public_03_load.md). The final measured run ingested 4,200,084 live events at 97,136 events/second during fetch and insert, used 612,532,224 bytes peak RSS (about 584 MiB), and took 233.29 seconds end to end (46.66 seconds per simulated day). The maximum observed event-to-controller lag was 27 simulated minutes. The SQLite file reached 2.5 GB. This was measured on the available macOS host, not the requested 4-vCPU Linux target.
 
-At 10×, linear projections put the five-day run near 41 minutes and storage near 25 GB; one simulated day projects to 8.2 minutes, close to the 10-minute target. Those estimates need a Linux target run and will vary with disk throughput. The current single database is the clear storage limit. Partition event processing by workflow, then tenant, and move persistence to a managed service before adding workers.
+At 10×, linear projections put the five-day run near 38.9 minutes and storage near 25 GB; one simulated day projects to 7.8 minutes, below the 10-minute target on this host. Those estimates need a run on the requested 4-vCPU Linux target and will vary with disk throughput. The current single database is the clear storage limit. Partition event processing by workflow, then tenant, and move persistence to a managed service before adding workers.
 
 ## 9. Reliability
 
@@ -176,23 +176,23 @@ Page on a cursor that stops advancing, repeated 5xx retries, disk near full, an 
 
 ### public_01
 
-| workflow | conclusion rate | Δ | pickup | Δ | engagement | Δ |
+| workflow | conclusion rate | Δ | pickup rate | Δ | engagement rate | Δ |
 |---|---:|---:|---:|---:|---:|---:|
-| ks_cancel | 0.349 | +2.3% | 0.242 | -1.1% | 0.506 | +2.8% |
-| nw_kyc | 0.379 | +3.4% | 0.245 | +1.2% | 0.609 | +1.9% |
-| nw_renewal | 0.417 | +0.3% | 0.262 | -1.0% | 0.550 | +1.5% |
-| ALL | 0.378 | +1.8% | 0.249 | -0.6% | 0.541 | +2.2% |
+| ks_cancel | 34.9% | +2.3% | 24.2% | -1.1% | 50.6% | +2.8% |
+| nw_kyc | 37.9% | +3.4% | 24.5% | +1.2% | 60.9% | +1.9% |
+| nw_renewal | 41.7% | +0.3% | 26.2% | -1.0% | 55.0% | +1.5% |
+| ALL | 37.8% | +1.8% | 24.9% | -0.6% | 54.1% | +2.2% |
 
 Three changes were applied: one beneficial and two neutral. No incident was present. The lift is modest and does not capture much hidden engagement headroom.
 
 ### public_02
 
-| workflow | conclusion rate | Δ | pickup | Δ | engagement | Δ |
+| workflow | conclusion rate | Δ | pickup rate | Δ | engagement rate | Δ |
 |---|---:|---:|---:|---:|---:|---:|
-| ks_cancel | 0.243 | +3.3% | 0.181 | -0.1% | 0.481 | +2.9% |
-| nw_kyc | 0.385 | +3.1% | 0.241 | +2.9% | 0.609 | +0.1% |
-| nw_renewal | 0.434 | +0.3% | 0.265 | +0.9% | 0.552 | -0.5% |
-| ALL | 0.337 | +1.9% | 0.221 | +0.9% | 0.537 | +0.9% |
+| ks_cancel | 24.3% | +3.3% | 18.1% | -0.1% | 48.1% | +2.9% |
+| nw_kyc | 38.5% | +3.1% | 24.1% | +2.9% | 60.9% | +0.1% |
+| nw_renewal | 43.4% | +0.3% | 26.5% | +0.9% | 55.2% | -0.5% |
+| ALL | 33.7% | +1.9% | 22.1% | +0.9% | 53.7% | +0.9% |
 
 Two changes were applied: one beneficial and one neutral; one request was rejected by the simulated approver. The caller-ID and supervisor-edit incidents were not fixed. No applied change was graded harmful.
 

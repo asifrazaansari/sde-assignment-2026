@@ -111,7 +111,7 @@ It did not implement caller-ID health or hallucination response. The grade still
 
 **Would this meet the Linux 10-minute target?**
 
-The local public_03 run used 245 seconds for five simulated days, or 49 seconds per day, but it ran on macOS. A linear 10× estimate is about 8.2 minutes per day and 25 GB of SQLite data. I would not certify the target without measuring on 4-vCPU Linux and addressing the database footprint.
+The local public_03 run ingested 4,200,084 events in 233.29 seconds, or 46.66 seconds per simulated day, at 97,136 events/second during fetch and insert. Peak RSS was 612,532,224 bytes (about 584 MiB), maximum observed event lag was 27 simulated minutes, and the SQLite file reached 2.5 GB. This was measured on macOS, not the requested 4-vCPU Linux target. A linear 10× estimate is 7.8 minutes per simulated day, 38.9 minutes for five days, and about 25 GB of SQLite data. I would not certify the target without measuring on 4-vCPU Linux and addressing the database footprint.
 
 **Why SQLite instead of the existing Postgres?**
 
