@@ -1,6 +1,7 @@
 import json
 
-from controller import Controller, Store, two_proportion_pvalue
+from controller import (Controller, Store, one_sided_two_proportion_pvalue,
+                        two_proportion_pvalue)
 
 
 def test_two_proportion_test_needs_a_real_population():
@@ -156,3 +157,114 @@ def test_guardrail_failure_proposes_incumbent_rollback(tmp_path):
     controller, wf, captured = _controller_with_experiment(
         tmp_path, v1_connected=900, v1_engaged=540, v2_connected=700, v2_engaged=600)
     _assert_rollback_requested(controller, wf, captured, "guardrail_bound_failed")
+
+
+def _caller_id_controller(tmp_path, windows):
+    controller = Controller("http://simulator.invalid", str(tmp_path / "controller.sqlite3"))
+    controller.last_ts = "2026-01-02T12:00:00+05:30"
+    lines = []
+    event_id = 0
+    for caller_id, previous_successes, current_successes, previous_n, current_n in windows:
+        for n, successes in ((previous_n, previous_successes), (current_n, current_successes)):
+            for i in range(n):
+                lines.append(json.dumps({
+                    "event_id": event_id, "type": "call", "workflow_id": "wf",
+                    "config_version": 1, "variant": {"caller_id": caller_id},
+                    "connected": i < successes,
+                }))
+                event_id += 1
+    controller.store.add_chunk(1, lines)
+    controller.current_config = lambda wid: {
+        "version": 1,
+        "config": {"allocations": {"default": {"caller_id": {"D_bad": 0.5, "D_good": 0.5}}}},
+    }
+    captured = {}
+
+    def fake_create_proposal(wf, current, proposed, summary, why, evidence):
+        captured.update({"proposed": proposed, "summary": summary, "evidence": evidence})
+        return "caller-id-proposal"
+
+    controller.create_proposal = fake_create_proposal
+    workflow = {"workflow_id": "wf", "governance": {
+        "auto_apply": {"enabled": False, "allowed_dims": [], "max_shift": 0},
+        "approver_hours": [10, 18],
+    }}
+    return controller, workflow, captured
+
+
+def test_caller_id_detector_flags_population_drop_and_keeps_exploration(tmp_path):
+    controller, workflow, captured = _caller_id_controller(tmp_path, [
+        ("D_bad", 400, 200, 500, 500),
+        ("D_good", 400, 400, 500, 500),
+    ])
+    assert one_sided_two_proportion_pvalue(200, 500, 400, 500) < 0.05
+    controller.evaluate_caller_id_health(workflow, family_size=2)
+
+    state = controller.store.get("caller_id_health:wf:D_bad")
+    assert state["status"] == "shift_pending"
+    assert state["proposal_id"] == "caller-id-proposal"
+    assert captured["proposed"]["allocations"]["default"]["caller_id"] == {
+        "D_bad": 0.1, "D_good": 0.9,
+    }
+    audit = controller.store.db.execute(
+        "SELECT evidence FROM decisions WHERE action='caller_id_flag_detected'").fetchone()
+    assert json.loads(audit[0])["caller_id"] == "D_bad"
+
+
+def test_caller_id_detector_does_not_flag_below_minimum_volume(tmp_path):
+    controller, workflow, _ = _caller_id_controller(tmp_path, [
+        ("D_bad", 240, 120, 299, 299),
+        ("D_good", 400, 400, 500, 500),
+    ])
+    controller.evaluate_caller_id_health(workflow, family_size=2)
+    assert controller.store.get("caller_id_health:wf:D_bad") is None
+    assert controller.store.db.execute(
+        "SELECT count(*) FROM decisions WHERE action='caller_id_flag_detected'").fetchone()[0] == 0
+
+
+def test_caller_id_detector_ignores_uniform_drop_across_all_ids(tmp_path):
+    controller, workflow, _ = _caller_id_controller(tmp_path, [
+        ("D_bad", 400, 200, 500, 500),
+        ("D_good", 400, 200, 500, 500),
+    ])
+    controller.evaluate_caller_id_health(workflow, family_size=2)
+    assert controller.store.db.execute(
+        "SELECT count(*) FROM decisions WHERE action='caller_id_flag_detected'").fetchone()[0] == 0
+
+
+def test_caller_id_recovery_proposes_restoring_prior_allocation(tmp_path):
+    controller, workflow, captured = _caller_id_controller(tmp_path, [
+        ("D_bad", 200, 400, 500, 500),
+        ("D_good", 400, 400, 500, 500),
+    ])
+    controller.store.set("caller_id_health:wf:D_bad", {
+        "workflow_id": "wf", "caller_id": "D_bad", "status": "active",
+        "operation": "shift", "original_weights": {"D_bad": 0.5, "D_good": 0.5},
+    })
+    controller.current_config = lambda wid: {
+        "version": 2,
+        "config": {"allocations": {"default": {"caller_id": {"D_bad": 0.1, "D_good": 0.9}}}},
+    }
+    controller.evaluate_caller_id_health(workflow, family_size=2)
+    state = controller.store.get("caller_id_health:wf:D_bad")
+    assert state["status"] == "restore_pending"
+    assert captured["proposed"]["allocations"]["default"]["caller_id"] == {
+        "D_bad": 0.5, "D_good": 0.5,
+    }
+    assert controller.store.db.execute(
+        "SELECT count(*) FROM decisions WHERE action='caller_id_recovery_detected'").fetchone()[0] == 1
+
+
+def test_caller_id_auto_apply_requires_policy_and_shift_bound(tmp_path):
+    controller = Controller("http://simulator.invalid", str(tmp_path / "controller.sqlite3"))
+    before = {"D1": 0.5, "D2": 0.5}
+    after = {"D1": 0.9, "D2": 0.1}
+    wf = {"governance": {"auto_apply": {
+        "enabled": True, "allowed_dims": ["caller_id"], "max_shift": 0.5,
+    }}}
+    assert controller._auto_apply_caller_id_allowed(wf, before, after)
+    wf["governance"]["auto_apply"]["max_shift"] = 0.2
+    assert not controller._auto_apply_caller_id_allowed(wf, before, after)
+    wf["governance"]["auto_apply"]["max_shift"] = 0.5
+    wf["governance"]["auto_apply"]["allowed_dims"] = []
+    assert not controller._auto_apply_caller_id_allowed(wf, before, after)

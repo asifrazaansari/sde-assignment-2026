@@ -4,34 +4,35 @@
 
 | workflow | conclusion rate | Δ | pickup | Δ | engagement | Δ | engagement gap captured | hallucinated calls (base) |
 |---|---|---|---|---|---|---|---|---|
-| ks_cancel | 0.246 | +4.4% | 0.183 | +1.3% | 0.479 | +2.5% | 0% | 306 (348) |
-| nw_kyc | 0.373 | -0.2% | 0.238 | +1.5% | 0.600 | -1.4% | 11% | 26 (29) |
-| nw_renewal | 0.441 | +1.8% | 0.264 | +0.5% | 0.561 | +1.2% | 5% | 59 (54) |
-| ALL | 0.338 | +2.2% | 0.222 | +1.0% | 0.538 | +1.0% | 4% | 391 (431) |
+| ks_cancel | 0.268 | +13.8% | 0.201 | +11.1% | 0.471 | +0.6% | 0% | 346 (348) |
+| nw_kyc | 0.365 | -2.3% | 0.235 | +0.2% | 0.596 | -2.1% | 11% | 21 (29) |
+| nw_renewal | 0.431 | -0.4% | 0.264 | +0.7% | 0.549 | -1.0% | 5% | 66 (54) |
+| ALL | 0.343 | +3.7% | 0.230 | +4.6% | 0.527 | -1.1% | 4% | 433 (431) |
 
 ## Changes applied by the controller
 
-4 applied — beneficial: 1, neutral: 2, harmful: 1
+5 applied — beneficial: 2, neutral: 2, harmful: 1
 
 - nw_kyc v2 (controller_approved) dims=['voice'] engageΔ=+0.022 didΔ=+0.000 → **beneficial**
 - ks_cancel v2 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
 - ks_cancel v3 (controller_approved) dims=['voice'] engageΔ=+0.000 didΔ=+0.000 → **neutral**
-- nw_kyc v3 (controller_approved) dims=['voice'] engageΔ=-0.019 didΔ=+0.000 → **harmful**
+- ks_cancel v4 (controller_approved) dims=['caller_id'] engageΔ=+0.000 didΔ=+0.384 → **beneficial**
+- nw_kyc v3 (controller_approved) dims=['voice'] engageΔ=-0.021 didΔ=+0.000 → **harmful**
 
 ## Governance
 
 ```
 {
-  "approval_requests": 5,
+  "approval_requests": 6,
   "decisions": {
     "rejected": 1,
-    "approved": 4,
+    "approved": 5,
     "expired": 0
   },
   "rejection_reasons": {
     "approver declined (judgement call)": 1
   },
-  "applied_via_approval": 4,
+  "applied_via_approval": 5,
   "auto_applied": 0,
   "auto_apply_rejected": 0,
   "apply_conflicts": 0,
@@ -53,14 +54,14 @@
     "workflow": "ks_cancel",
     "at": "D2 10:00",
     "flagged_did_share_by_day": {
-      "2": 0.495,
-      "3": 0.495,
-      "4": 0.511,
-      "5": 0.509,
-      "6": 0.501,
-      "7": 0.498,
-      "8": 0.497,
-      "9": 0.503
+      "2": 0.261,
+      "3": 0.102,
+      "4": 0.099,
+      "5": 0.094,
+      "6": 0.094,
+      "7": 0.104,
+      "8": 0.099,
+      "9": 0.106
     }
   },
   {

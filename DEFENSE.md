@@ -60,14 +60,21 @@
 
 ### No auto-apply
 
-- **What:** Every voice change uses `/approvals`, even for workflows that allow limited auto-apply.
-- **Why:** Voice affects what customers hear, and an approval is a useful compliance record.
-- **Alternative rejected:** Using whatever automatic dimensions happen to be allowed would create different customer-facing governance by tenant.
-- **If the constraint changes:** Only enable auto-apply with a signed policy, a tested dimension allowlist, and a bounded shift proof.
+- **What:** Every voice change uses `/approvals`. Caller-ID changes use PUT auto-apply only when policy enables it, caller ID is allowed, and total-variation shift is within `max_shift`; otherwise they use `/approvals`.
+- **Why:** Caller-ID allocation is eligible for bounded automation only where the workflow explicitly permits it. Voice changes remain human-approved.
+- **Alternative rejected:** Applying every caller-ID proposal automatically would ignore tenant-specific policy and shift limits.
+- **If the constraint changes:** Recheck the versioned policy before each change and route newly disallowed dimensions through approval.
 
-### Explicit cuts: incidents and decay
+### Caller-ID health
 
-- **What:** Caller-ID health, hallucination repair, prompt validation, and post-promotion decay rollback are not implemented.
+- **What:** Compare each ID's latest 500 calls with its prior 500 and the pooled other IDs. Require at least 300 dials, one-sided corrected tests across IDs and workflows, and a 10-point rate gap. On a flag, reduce its allocation while preserving 10% exploration, then check pickup after apply.
+- **Why:** A 3-point floor produced a false public_01 flag during tuning. With the 10-point floor, the fresh public_01 run had zero flags. Public_02's D2 allocation changed at D2 14:00, four hours after the D2 10:00 incident. The grade shows its share falling to about 10% from D3, but still lists the incident; verification logged `caller_id_not_recovered` after 309 dials. No fix MTTR was reported by the grader.
+- **Alternative rejected:** One-call alerts and permanent DID blacklists react to noise and cannot detect recovery.
+- **If the constraint changes:** Recalibrate the effect floor and look correction with the real call volume and cost of a false alert. If policy removes caller-ID auto-apply, route all changes through approvals.
+
+### Explicit cuts: hallucination and decay
+
+- **What:** Hallucination repair, prompt validation, and post-promotion decay rollback are not implemented.
 - **Why:** Each needs its own population detector, evidence threshold, credit policy, and safe governance path.
 - **Alternative rejected:** A shallow alert or an LLM prompt change would imply a fix without verifying safety or outcome.
 - **If the constraint changes:** Add the detector and verification loop before enabling automated remediation; reserve credits first.
@@ -114,7 +121,7 @@ The event invalidates the active experiment. If the approval later goes stale an
 
 **What did the public_02 controller fail to fix?**
 
-It did not implement caller-ID health or hallucination response. The grade still shows the flagged DID and supervisor edits. The outcome lift is not evidence that those incidents were repaired.
+It reduced the flagged caller ID allocation after detecting a significant pickup drop, but pickup on that ID did not recover and the grade still lists the incident. It did not implement hallucination response, and supervisor edits remained. The outcome lift is not evidence that those incidents were repaired.
 
 **Would this meet the Linux 10-minute target?**
 

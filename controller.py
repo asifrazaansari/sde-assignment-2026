@@ -21,6 +21,10 @@ ALPHA = 0.05
 GUARDRAIL_DROP = 0.02
 # 1.645 is the one-sided 95% normal quantile for a non-inferiority lower bound.
 GUARDRAIL_Z = 1.645
+CALLER_ID_MIN_DIALS = 300
+CALLER_ID_WINDOW = 500
+CALLER_ID_MIN_GAP = 0.10
+CALLER_ID_EXPLORATION_SHARE = 0.10
 
 
 def two_proportion_pvalue(x1: int, n1: int, x2: int, n2: int) -> float:
@@ -34,6 +38,23 @@ def two_proportion_pvalue(x1: int, n1: int, x2: int, n2: int) -> float:
     z = abs(x1 / n1 - x2 / n2) / se
     # Normal-tail approximation, adequate for the fixed, conservative threshold.
     return math.erfc(z / math.sqrt(2))
+
+
+def one_sided_two_proportion_pvalue(x_lower: int, n_lower: int,
+                                    x_higher: int, n_higher: int) -> float:
+    """P-value for the directional alternative that the second rate is higher."""
+    if min(n_lower, n_higher) < CALLER_ID_MIN_DIALS:
+        return 1.0
+    if min(x_lower, x_higher) < 0 or x_lower > n_lower or x_higher > n_higher:
+        return 1.0
+    if x_higher / n_higher <= x_lower / n_lower:
+        return 1.0
+    pooled = (x_lower + x_higher) / (n_lower + n_higher)
+    se = math.sqrt(pooled * (1 - pooled) * (1 / n_lower + 1 / n_higher))
+    if se == 0:
+        return 1.0
+    z = (x_higher / n_higher - x_lower / n_lower) / se
+    return 0.5 * math.erfc(z / math.sqrt(2))
 
 
 class Store:
@@ -55,8 +76,10 @@ class Store:
             CREATE TABLE IF NOT EXISTS proposals (
               proposal_id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, base_version INTEGER NOT NULL,
               body TEXT NOT NULL, approval_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL);
+            CREATE INDEX IF NOT EXISTS events_workflow_event ON events(workflow_id,type,event_id DESC);
         """)
         self.db.commit()
+        self._caller_ids_cache = {}
 
     def get(self, key, default=None):
         row = self.db.execute("SELECT value FROM state WHERE key=?", (key,)).fetchone()
@@ -83,8 +106,12 @@ class Store:
                 eid = event.get("event_id")
                 if eid is None:
                     continue
+                wid = event.get("workflow_id")
+                caller_id = event.get("variant", {}).get("caller_id")
+                if wid in self._caller_ids_cache and event.get("type") == "call" and caller_id is not None:
+                    self._caller_ids_cache[wid].add(str(caller_id))
                 cur = self.db.execute("INSERT OR IGNORE INTO events VALUES(?,?,?,?,?,?)",
-                                      (eid, chunk, event.get("workflow_id"), event["type"], event.get("ts"),
+                                      (eid, chunk, wid, event["type"], event.get("ts"),
                                        json.dumps(event, sort_keys=True)))
                 inserted += cur.rowcount
             old = self.get("chunk_cursor", -1)
@@ -95,6 +122,44 @@ class Store:
     def event_rows(self, workflow, kind="call"):
         return self.db.execute("SELECT body FROM events WHERE workflow_id=? AND type=? ORDER BY event_id",
                                (workflow, kind)).fetchall()
+
+    def caller_ids(self, workflow):
+        if workflow not in self._caller_ids_cache:
+            self._caller_ids_cache[workflow] = {str(row[0]) for row in self.db.execute(
+                "SELECT DISTINCT json_extract(body,'$.variant.caller_id') FROM events "
+                "WHERE workflow_id=? AND type='call' AND json_extract(body,'$.variant.caller_id') IS NOT NULL",
+                (workflow,)).fetchall()}
+        return sorted(self._caller_ids_cache[workflow])
+
+    def caller_id_windows(self, workflow, caller_id, window_size=CALLER_ID_WINDOW):
+        rows = self.db.execute(
+            "SELECT body FROM events WHERE workflow_id=? AND type='call' "
+            "AND json_extract(body,'$.variant.caller_id')=? ORDER BY event_id DESC LIMIT ?",
+            (workflow, caller_id, window_size * 2)).fetchall()
+        recent = [json.loads(row[0]) for row in rows]
+        recent.reverse()
+        split = max(0, len(recent) - window_size)
+        return recent[split:], recent[max(0, split - window_size):split]
+
+    def last_event_id(self, workflow):
+        row = self.db.execute("SELECT max(event_id) FROM events WHERE workflow_id=?", (workflow,)).fetchone()
+        return row[0] if row and row[0] is not None else -1
+
+    def version_pickup_since(self, workflow, version, caller_id, after_event_id):
+        if caller_id is None:
+            row = self.db.execute(
+                "SELECT count(*),coalesce(sum(CASE WHEN json_extract(body,'$.connected') THEN 1 ELSE 0 END),0),"
+                "coalesce(max(event_id),?) FROM events WHERE workflow_id=? AND type='call' AND event_id>? "
+                "AND json_extract(body,'$.config_version')=?",
+                (after_event_id, workflow, after_event_id, version)).fetchone()
+        else:
+            row = self.db.execute(
+                "SELECT count(*),coalesce(sum(CASE WHEN json_extract(body,'$.connected') THEN 1 ELSE 0 END),0),"
+                "coalesce(max(event_id),?) FROM events WHERE workflow_id=? AND type='call' AND event_id>? "
+                "AND json_extract(body,'$.config_version')=? "
+                "AND json_extract(body,'$.variant.caller_id')=?",
+                (after_event_id, workflow, after_event_id, version, caller_id)).fetchone()
+        return {"dials": row[0], "connected": row[1], "last_event_id": row[2]}
 
     def proposal_rows(self, status=None):
         if status:
@@ -306,6 +371,283 @@ class Controller:
         confidence = max(0.0, 1.0 - evidence.get("p_value", 1.0))
         return round(min(1.0, abs(rates[0] - rates[1]) * confidence * 10), 3)
 
+    @staticmethod
+    def caller_id_state_key(workflow, caller_id):
+        return f"caller_id_health:{workflow}:{caller_id}"
+
+    @staticmethod
+    def pickup_summary(events):
+        n = len(events)
+        successes = sum(bool(ev.get("connected")) for ev in events)
+        return {"dials": n, "connected": successes, "pickup_rate": successes / n if n else None}
+
+    def replace_caller_id_proposal(self, workflow, old_id, new_id):
+        if not new_id:
+            return
+        prefix = f"caller_id_health:{workflow}:"
+        for key, value in self.store.db.execute("SELECT key,value FROM state WHERE key LIKE ?", (prefix + "%",)).fetchall():
+            state = json.loads(value)
+            if state.get("proposal_id") == old_id:
+                state["proposal_id"] = new_id
+                self.store.set(key, state)
+
+    def caller_id_family_size(self, workflows):
+        return max(1, sum(len(self.store.caller_ids(w["workflow_id"])) for w in workflows))
+
+    @staticmethod
+    def total_variation(before, after):
+        keys = set(before) | set(after)
+        return 0.5 * sum(abs(float(before.get(k, 0)) - float(after.get(k, 0))) for k in keys)
+
+    def _auto_apply_caller_id_allowed(self, wf, before, after):
+        policy = wf.get("governance", {}).get("auto_apply", {})
+        return (policy.get("enabled") is True and "caller_id" in policy.get("allowed_dims", []) and
+                self.total_variation(before, after) <= float(policy.get("max_shift", 0)))
+
+    def _caller_id_supervisor_conflict(self, workflow, base_version):
+        for row in self.store.db.execute(
+                "SELECT body FROM events WHERE workflow_id=? AND type='config_changed'", (workflow,)):
+            ev = json.loads(row[0])
+            if (ev.get("actor") == "supervisor" and ev.get("version", 0) > base_version and
+                    "caller_id" in ev.get("changed_dims", [])):
+                return ev
+        return None
+
+    def _mark_caller_id_applied(self, state, workflow, version):
+        if state.get("operation") == "shift":
+            state.update(status="active", applied_version=version, proposal_id=None,
+                         verify_logged=False, verify_after_event_id=self.store.last_event_id(workflow),
+                         verify_id_dials=0, verify_id_connected=0,
+                         verify_workflow_dials=0, verify_workflow_connected=0)
+        else:
+            state.update(status="healthy", applied_version=version, proposal_id=None)
+            state.pop("original_weights", None)
+        self.store.set(self.caller_id_state_key(workflow, state["caller_id"]), state)
+
+    def _caller_id_change(self, wf, caller_id, current, target_weights, operation, state, evidence):
+        wid = wf["workflow_id"]
+        key = self.caller_id_state_key(wid, caller_id)
+        proposed = copy.deepcopy(current["config"])
+        proposed.setdefault("allocations", {}).setdefault("default", {})["caller_id"] = target_weights
+        if proposed == current["config"]:
+            state.update(status="healthy" if operation == "restore" else "blocked", proposal_id=None)
+            self.store.set(key, state)
+            return None
+
+        summary = (f"Restore caller ID {caller_id} to its prior allocation after pickup recovery." if operation == "restore"
+                   else f"Reduce caller ID {caller_id} after a population pickup drop; retain a 10% exploration share.")
+        rationale = "Population pickup evidence met the pre-set volume, effect, and corrected significance thresholds."
+        version = current["version"]
+        identity = json.dumps([wid, caller_id, operation, version, target_weights], sort_keys=True)
+        proposal_id = "ctl-" + hashlib.sha256(identity.encode()).hexdigest()[:24]
+        state.update(status=f"{operation}_pending", operation=operation, proposal_id=proposal_id)
+        self.store.set(key, state)
+
+        before_weights = current["config"].get("allocations", {}).get("default", {}).get("caller_id", {})
+        if self._auto_apply_caller_id_allowed(wf, before_weights, target_weights):
+            body = {"proposal_id": proposal_id, "base_version": version, "proposed_config": proposed,
+                    "rationale": rationale, "evidence": evidence}
+            response = None
+            try:
+                response = self.api.put(f"/workflows/{wid}/config", json=body)
+            except httpx.HTTPError:
+                # Resolve an uncertain PUT by reading the authoritative live config.
+                pass
+            fresh = self.current_config(wid)
+            if fresh["config"] == proposed:
+                state["operation"] = operation
+                self._mark_caller_id_applied(state, wid, fresh["version"])
+                self.store.audit(wid, f"caller_id_{operation}_auto_applied",
+                                 "Caller-ID allocation changed under the workflow's permitted auto-apply policy.",
+                                 {**evidence, "proposal_id": proposal_id, "version": fresh["version"]}, self.last_ts,
+                                 outcome="applied")
+                return proposal_id
+            if response is not None and response.status_code == 409:
+                conflict = self._caller_id_supervisor_conflict(wid, version)
+                if conflict:
+                    state.update(status="shift_conflict" if operation == "shift" else "active",
+                                 proposal_id=None)
+                    self.store.set(key, state)
+                    self.store.audit(wid, "caller_id_supervisor_conflict",
+                                     "A supervisor edited caller ID after the auto-apply base; the controller did not overwrite that edit.",
+                                     {**evidence, "supervisor_event": conflict}, self.last_ts, outcome="abandoned")
+                    return None
+                proposed = self.apply_dimensions(fresh["config"], proposed, {"caller_id"})
+                current = fresh
+            elif response is not None and response.status_code != 403 and response.status_code < 500:
+                state.update(status="shift_blocked" if operation == "shift" else "active", proposal_id=None)
+                self.store.set(key, state)
+                self.store.audit(wid, "caller_id_auto_apply_rejected", response.text,
+                                 {**evidence, "proposal_id": proposal_id, "status_code": response.status_code},
+                                 self.last_ts, outcome="not_applied")
+                return None
+            else:
+                self.store.audit(wid, "caller_id_auto_apply_fallback",
+                                 "Auto-apply was unavailable or stale; submit through the standard approval path.",
+                                 {**evidence, "proposal_id": proposal_id}, self.last_ts)
+
+        new_id = self.create_proposal(wf, current, proposed, summary, rationale, {})
+        if new_id:
+            state.update(status=f"{operation}_pending", proposal_id=new_id)
+        else:
+            state.update(status="shift_blocked" if operation == "shift" else "active", proposal_id=None)
+        self.store.set(key, state)
+        return new_id
+
+    def sync_caller_id_proposals(self, workflows):
+        rows = self.store.db.execute("SELECT key,value FROM state WHERE key LIKE 'caller_id_health:%'").fetchall()
+        for key, raw in rows:
+            state = json.loads(raw)
+            proposal_id = state.get("proposal_id")
+            if not proposal_id:
+                continue
+            proposal = self.store.db.execute("SELECT status FROM proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+            if not proposal:
+                continue
+            status = proposal["status"]
+            if status == "applied":
+                wf_id = state["workflow_id"]
+                live = self.current_config(wf_id)
+                self._mark_caller_id_applied(state, wf_id, live["version"])
+            elif status in {"rejected", "expired", "lapsed", "abandoned_conflict", "error", "stale"}:
+                state["status"] = "shift_rejected" if state.get("operation") == "shift" else "active_restore_rejected"
+                state["proposal_id"] = None
+                self.store.set(key, state)
+
+    def verify_caller_id_shifts(self, workflows, family_size):
+        by_id = {w["workflow_id"]: w for w in workflows}
+        rows = self.store.db.execute("SELECT key,value FROM state WHERE key LIKE 'caller_id_health:%'").fetchall()
+        for key, raw in rows:
+            state = json.loads(raw)
+            if (state.get("status") != "active" or state.get("operation") != "shift" or
+                    state.get("verify_logged") or not state.get("applied_version")):
+                continue
+            wid, caller_id = state["workflow_id"], state["caller_id"]
+            after_id = self.store.version_pickup_since(
+                wid, state["applied_version"], caller_id, state["verify_after_event_id"])
+            after_workflow = self.store.version_pickup_since(
+                wid, state["applied_version"], None, state["verify_after_event_id"])
+            state["verify_after_event_id"] = max(after_id["last_event_id"], after_workflow["last_event_id"])
+            state["verify_id_dials"] += after_id["dials"]
+            state["verify_id_connected"] += after_id["connected"]
+            state["verify_workflow_dials"] += after_workflow["dials"]
+            state["verify_workflow_connected"] += after_workflow["connected"]
+            if min(state["verify_id_dials"], state["verify_workflow_dials"]) < CALLER_ID_MIN_DIALS:
+                self.store.set(key, state)
+                continue
+            id_rate = state["verify_id_connected"] / state["verify_id_dials"]
+            wf_rate = state["verify_workflow_connected"] / state["verify_workflow_dials"]
+            healthy = [other for other in self.store.caller_ids(wid) if other != caller_id and
+                       self.store.get(self.caller_id_state_key(wid, other), {}).get("status") not in
+                       {"active", "shift_pending", "shift_rejected", "shift_conflict"}]
+            other_events = []
+            for other in healthy:
+                other_events.extend(self.store.caller_id_windows(wid, other)[0])
+            rest = self.pickup_summary(other_events)
+            recovered = (rest["dials"] >= CALLER_ID_MIN_DIALS and
+                         id_rate >= rest["pickup_rate"] - CALLER_ID_MIN_GAP and
+                         wf_rate >= state["pre_workflow_rate"] - CALLER_ID_MIN_GAP)
+            self.store.audit(wid, "caller_id_verified" if recovered else "caller_id_not_recovered",
+                             "Recorded caller-ID and workflow pickup after the governed allocation change.",
+                             {"caller_id": caller_id, "before_caller_id": state["pre_caller_rate"],
+                              "after_caller_id": id_rate, "before_workflow": state["pre_workflow_rate"],
+                              "after_workflow": wf_rate, "after_dials": state["verify_id_dials"],
+                              "comparison_rest": rest, "applied_version": state["applied_version"]},
+                             self.last_ts, outcome="verified" if recovered else "not_recovered")
+            state["verify_logged"] = True
+            self.store.set(key, state)
+
+    def evaluate_caller_id_health(self, wf, family_size):
+        wid = wf["workflow_id"]
+        caller_ids = self.store.caller_ids(wid)
+        if len(caller_ids) < 2:
+            return
+        all_windows = {cid: self.store.caller_id_windows(wid, cid) for cid in caller_ids}
+        states = {cid: self.store.get(self.caller_id_state_key(wid, cid),
+                                      {"workflow_id": wid, "caller_id": cid, "status": "healthy"})
+                  for cid in caller_ids}
+        excluded = {cid for cid, state in states.items() if state.get("status") in
+                    {"active", "shift_pending", "shift_rejected", "shift_conflict", "shift_blocked",
+                     "restore_pending", "active_restore_rejected"}}
+        alpha = ALPHA / max(1, family_size)
+        for caller_id in caller_ids:
+            state = states[caller_id]
+            if state.get("status") not in {"healthy", "recovered", "active"}:
+                continue
+            current, previous = all_windows[caller_id]
+            current_stats = self.pickup_summary(current)
+            previous_stats = self.pickup_summary(previous)
+            if min(current_stats["dials"], previous_stats["dials"]) < CALLER_ID_MIN_DIALS:
+                continue
+            rest_events = []
+            for other in caller_ids:
+                if other != caller_id and other not in excluded:
+                    rest_events.extend(all_windows[other][0])
+            rest_stats = self.pickup_summary(rest_events)
+            if rest_stats["dials"] < CALLER_ID_MIN_DIALS:
+                continue
+            p_current_vs_rest_lower = one_sided_two_proportion_pvalue(
+                current_stats["connected"], current_stats["dials"],
+                rest_stats["connected"], rest_stats["dials"])
+            p_current_vs_previous_lower = one_sided_two_proportion_pvalue(
+                current_stats["connected"], current_stats["dials"],
+                previous_stats["connected"], previous_stats["dials"])
+            p_previous_vs_current_higher = one_sided_two_proportion_pvalue(
+                previous_stats["connected"], previous_stats["dials"],
+                current_stats["connected"], current_stats["dials"])
+            current_rate = current_stats["pickup_rate"]
+            previous_rate = previous_stats["pickup_rate"]
+            rest_rate = rest_stats["pickup_rate"]
+            evidence = {"caller_id": caller_id, "current_window": current_stats,
+                        "previous_window": previous_stats, "pooled_other_ids": rest_stats,
+                        "min_dials_per_window": CALLER_ID_MIN_DIALS,
+                        "window_size_per_id": CALLER_ID_WINDOW, "minimum_gap": CALLER_ID_MIN_GAP,
+                        "family_size_ids_across_workflows": family_size, "corrected_alpha": alpha,
+                        "p_current_vs_rest": p_current_vs_rest_lower,
+                        "p_current_vs_previous": p_current_vs_previous_lower}
+
+            if state.get("status") == "active":
+                if (previous_rate is not None and current_rate - previous_rate > CALLER_ID_MIN_GAP and
+                        p_previous_vs_current_higher < alpha and
+                        current_rate >= rest_rate - CALLER_ID_MIN_GAP):
+                    self.store.audit(wid, "caller_id_recovery_detected",
+                                     "The flagged ID's pickup recovered against its earlier window and is within the rest group's minimum-effect margin.",
+                                     evidence, self.last_ts, outcome="restore_requested")
+                    current_config = self.current_config(wid)
+                    prior = state.get("original_weights") or {}
+                    self._caller_id_change(wf, caller_id, current_config, prior, "restore", state, evidence)
+                continue
+
+            sudden_drop = (previous_rate - current_rate > CALLER_ID_MIN_GAP and
+                           p_current_vs_previous_lower < alpha)
+            population_drop = (rest_rate - current_rate > CALLER_ID_MIN_GAP and
+                               p_current_vs_rest_lower < alpha)
+            if not (sudden_drop and population_drop):
+                continue
+
+            current_config = self.current_config(wid)
+            allocations = current_config["config"].get("allocations", {}).get("default", {}).get("caller_id", {})
+            original_weights = {str(k): float(v) for k, v in allocations.items()}
+            flagged_share = original_weights.get(caller_id, 0.0)
+            healthy_weights = {k: v for k, v in original_weights.items() if k != caller_id and k not in excluded and v > 0}
+            healthy_total = sum(healthy_weights.values())
+            exploration = min(flagged_share, CALLER_ID_EXPLORATION_SHARE)
+            if flagged_share <= exploration or healthy_total <= 0:
+                continue
+            target = {caller_id: exploration}
+            target.update({k: (1 - exploration) * v / healthy_total for k, v in healthy_weights.items()})
+            target = {k: round(v, 6) for k, v in target.items() if v > 0}
+            all_calls = [ev for calls, _ in all_windows.values() for ev in calls]
+            workflow_before = self.pickup_summary(all_calls)
+            state.update({"workflow_id": wid, "caller_id": caller_id, "status": "healthy",
+                          "original_weights": original_weights,
+                          "pre_caller_rate": current_rate,
+                          "pre_workflow_rate": workflow_before["pickup_rate"]})
+            self.store.audit(wid, "caller_id_flag_detected",
+                             "Recent pickup fell significantly below both the pooled other IDs and this ID's own earlier window.",
+                             evidence, self.last_ts, outcome="shift_requested")
+            self._caller_id_change(wf, caller_id, current_config, target, "shift", state, evidence)
+
     def submit_queued(self, workflows):
         by_id = {w["workflow_id"]: w for w in workflows}
         for row in self.store.proposal_rows("queued"):
@@ -334,6 +676,7 @@ class Controller:
             self.store.db.execute("UPDATE proposals SET status='superseded' WHERE proposal_id=?", (row["proposal_id"],))
             self.store.db.commit()
             new_id = self.create_proposal(wf, fresh, proposed, old["change_summary"], old["rationale"], {})
+            self.replace_caller_id_proposal(row["workflow_id"], row["proposal_id"], new_id)
             exp = self.store.get(f"experiment:{row['workflow_id']}")
             if exp and exp.get("proposal_id") == row["proposal_id"] and new_id:
                 exp["proposal_id"] = new_id
@@ -407,6 +750,7 @@ class Controller:
                     self.store.audit(row["workflow_id"], "stale_approval", "Approval was based on an old version; re-proposed the same dimensions on the supervisor's current config.",
                                      {"approval_id": row["approval_id"], "new_base": fresh["version"]}, self.last_ts)
                     new_id = self.create_proposal(wf, fresh, proposed, old_body["change_summary"], old_body["rationale"], {})
+                    self.replace_caller_id_proposal(row["workflow_id"], row["proposal_id"], new_id)
                     exp = self.store.get(f"experiment:{row['workflow_id']}")
                     if exp and exp.get("proposal_id") == row["proposal_id"] and new_id:
                         exp["proposal_id"] = new_id
@@ -455,6 +799,7 @@ class Controller:
                         proposed = self.apply_dimensions(fresh["config"], old_body["proposed_config"], changed)
                         new_id = self.create_proposal(wf, fresh, proposed, old_body["change_summary"],
                                                       old_body["rationale"] + " Fresh proposal after prior expiry.", {})
+                        self.replace_caller_id_proposal(row["workflow_id"], row["proposal_id"], new_id)
                         exp = self.store.get(f"experiment:{row['workflow_id']}")
                         if exp and exp.get("proposal_id") == row["proposal_id"] and new_id:
                             exp["proposal_id"] = new_id
@@ -615,8 +960,12 @@ class Controller:
                     workflows = self.workflow_list()
                     self.reconcile_proposals(workflows)
                     self.submit_queued(workflows)
+                    self.sync_caller_id_proposals(workflows)
+                    caller_family_size = self.caller_id_family_size(workflows)
+                    self.verify_caller_id_shifts(workflows, caller_family_size)
                     for wf in workflows:
                         self.evaluate_experiment(wf, family_size=len(workflows))
+                        self.evaluate_caller_id_health(wf, caller_family_size)
                         self.maybe_start_experiment(wf)
                 else:
                     time.sleep(1)
@@ -626,8 +975,12 @@ class Controller:
             workflows = self.workflow_list()
             self.reconcile_proposals(workflows)
             self.submit_queued(workflows)
+            self.sync_caller_id_proposals(workflows)
+            caller_family_size = self.caller_id_family_size(workflows)
+            self.verify_caller_id_shifts(workflows, caller_family_size)
             for wf in workflows:
                 self.evaluate_experiment(wf, family_size=len(workflows))
+                self.evaluate_caller_id_health(wf, caller_family_size)
                 # A workflow gets one exploration proposal; promotion follows from its observed data.
                 self.maybe_start_experiment(wf)
             state = self.get("/sim/state")
@@ -640,6 +993,8 @@ class Controller:
         self.process_config_events()
         workflows = self.workflow_list()
         self.reconcile_proposals(workflows)
+        self.sync_caller_id_proposals(workflows)
+        self.verify_caller_id_shifts(workflows, self.caller_id_family_size(workflows))
         self.store.audit(None, "finished", "Simulator reports the scenario is complete.",
                          {"chunk_cursor": self.store.get("chunk_cursor"), "credits_remaining": self.credits_seen}, self.last_ts)
         print(json.dumps({"status": "finished", "timestamp": self.last_ts,
