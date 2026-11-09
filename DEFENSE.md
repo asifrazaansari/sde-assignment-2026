@@ -68,7 +68,7 @@
 ### Caller-ID health
 
 - **What:** Compare each ID's latest 500 calls with its prior 500 and the pooled other IDs. Require at least 300 dials, one-sided corrected tests across IDs and workflows, and a 10-point rate gap. On a flag, reduce its allocation while preserving 10% exploration, then check pickup after apply.
-- **Why:** A 3-point floor produced a false public_01 flag during tuning. With the 10-point floor, the fresh public_01 run had zero flags. Public_02's D2 allocation changed at D2 14:00, four hours after the D2 10:00 incident. The grade shows its share falling to about 10% from D3, but still lists the incident; verification logged `caller_id_not_recovered` after 309 dials. No fix MTTR was reported by the grader.
+- **Why:** A 3-point floor falsely flagged D1 in an early public_01 tuning run and triggered a local simulator shift; that run was stopped before grading and its result was not used. With the 10-point floor, the fresh public_01 run had zero flags. Public_02's D2 allocation changed at D2 14:00, four hours after the D2 10:00 incident. The grade shows its share falling to about 10% from D3, but still lists the incident; verification logged `caller_id_not_recovered` after 309 dials. No fix MTTR was reported by the grader.
 - **Alternative rejected:** One-call alerts and permanent DID blacklists react to noise and cannot detect recovery.
 - **If the constraint changes:** Recalibrate the effect floor and look correction with the real call volume and cost of a false alert. If policy removes caller-ID auto-apply, route all changes through approvals.
 
