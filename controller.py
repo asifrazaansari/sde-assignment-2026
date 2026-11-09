@@ -289,7 +289,8 @@ class Controller:
         self.store.db.execute("UPDATE proposals SET approval_id=?,status='pending' WHERE proposal_id=?", (approval_id, proposal_id))
         self.store.db.commit()
         self.store.audit(wf["workflow_id"], "proposal_created", why,
-                         {"proposal_id": proposal_id, "approval_id": approval_id, "changed_dims": changed, "impact_score": 0.1}, self.last_ts)
+                         {"proposal_id": proposal_id, "approval_id": approval_id, "changed_dims": changed,
+                          "impact_score": body["impact_score"]}, self.last_ts)
         return proposal_id
 
     @staticmethod
