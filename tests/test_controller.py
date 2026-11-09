@@ -74,3 +74,24 @@ def test_proposal_audit_records_submitted_impact_score(tmp_path):
     assert posted["path"] == "/approvals"
     assert posted["body"]["impact_score"] == 1.0
     assert audited_evidence["impact_score"] == posted["body"]["impact_score"]
+
+
+def test_reconcile_does_not_recreate_pending_proposal_after_reopen(tmp_path):
+    db = tmp_path / "controller.sqlite3"
+    store = Store(str(db))
+    body = {"proposal_id": "stable-id", "workflow_id": "wf", "base_version": 1}
+    store.db.execute(
+        "INSERT INTO proposals(proposal_id,workflow_id,base_version,body,approval_id,status,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("stable-id", "wf", 1, json.dumps(body), "apr_1", "pending", "2026-01-01T10:00:00+05:30"))
+    store.db.commit()
+    store.db.close()
+
+    controller = Controller("http://simulator.invalid", str(db))
+    controller.get = lambda path, **kwargs: {"status": "pending"}
+    controller.reconcile_proposals([{"workflow_id": "wf"}])
+
+    rows = controller.store.proposal_rows()
+    assert len(rows) == 1
+    assert rows[0]["proposal_id"] == "stable-id"
+    assert rows[0]["approval_id"] == "apr_1"
+    assert rows[0]["status"] == "pending"

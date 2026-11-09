@@ -141,7 +141,7 @@ At 10×, linear projections put the five-day run near 38.9 minutes and storage n
 
 ## 9. Reliability
 
-The script [scripts/crash_recovery.sh](scripts/crash_recovery.sh) killed the controller after one second while the simulator was unfinished, restarted it with the same database, and completed public_01. The log is [reports/crash_recovery.log](reports/crash_recovery.log): six apply records, six unique approval IDs, zero duplicate applies. The ingestion test verifies duplicate event IDs are ignored and the cursor survives a store reopen; the approval test verifies a pending approval survives reopen.
+The script [scripts/crash_recovery.sh](scripts/crash_recovery.sh) starts a fresh public_01 simulator and kills the controller after observing a pending approval. It restarts with the same database while the simulator stays alive. On the recorded run, all three proposals reached terminal applied status, there were three unique approval IDs and zero duplicate applies, the cursor advanced from 10 at the first kill to 392 at completion, and the simulator finished. The approved-but-unapplied kill point was not observed before public_01 completed, as recorded in [reports/crash_recovery.log](reports/crash_recovery.log). Tests verify duplicate event IDs are ignored, the cursor survives reopen, a pending proposal survives reopen, and reconciliation does not create a second proposal.
 
 GETs and non-advance POSTs retry network errors and 5xx with capped backoff. Advance is not blindly retried: after an uncertain result, the controller checks `/sim/state` and ingests any chunk already produced. Ordinary 4xx errors stop the run; finished, stale, duplicate proposal, and lapsed statuses have explicit handling.
 
