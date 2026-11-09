@@ -864,28 +864,39 @@ class Controller:
                     "guardrail_floor": -guardrail_drop}
         primary_inconclusive = pvalue >= threshold
         guardrail_failed = guardrail_lower_bound < -guardrail_drop
-        if primary_inconclusive or guardrail_failed:
+        rate_a = ra["primary_success"] / ra["primary_n"]
+        rate_b = rb["primary_success"] / rb["primary_n"]
+        candidate_significantly_worse = rate_b < rate_a and pvalue < threshold
+        if guardrail_failed or candidate_significantly_worse:
             reasons = []
-            if primary_inconclusive:
-                reasons.append("primary_not_significant")
             if guardrail_failed:
                 reasons.append("guardrail_bound_failed")
+            if candidate_significantly_worse:
+                reasons.append("candidate_significantly_worse")
             evidence["no_winner_reason"] = reasons
             current = self.current_config(wid)
             cfg = copy.deepcopy(current["config"])
             cfg.setdefault("allocations", {}).setdefault("default", {})["voice"] = {a: 1.0}
             result = self.create_proposal(
                 wf, current, cfg,
-                f"Restore incumbent voice {a} after the experiment produced no promotable winner.",
-                "No candidate cleared both the primary significance threshold and guardrail bound; request approval to restore the incumbent voice allocation.",
+                f"Restore incumbent voice {a} after the candidate failed the experiment decision rule.",
+                "The guardrail bound failed or the candidate was significantly worse on the primary KPI; request approval to restore the incumbent voice allocation.",
                 {})
             exp["phase"] = "rollback_pending" if result else "rollback_not_submitted"
             exp["proposal_id"] = result
             self.store.set(f"experiment:{wid}", exp)
             self.store.audit(wid, "experiment_no_winner_rollback",
-                             "No candidate cleared both the primary significance threshold and guardrail bound; the incumbent rollback was sent through the standard approval path.",
+                             "The guardrail failed or the candidate was significantly worse; the incumbent rollback was sent through the standard approval path.",
                              evidence, self.last_ts,
                              outcome="rollback_pending" if result else "rollback_not_submitted")
+            return
+        if primary_inconclusive:
+            evidence["no_winner_reason"] = ["primary_not_significant"]
+            exp["phase"] = "complete_inconclusive"
+            self.store.set(f"experiment:{wid}", exp)
+            self.store.audit(wid, "experiment_no_winner_split_retained",
+                             "The primary result was not significant and the guardrail passed; leave the approved split in place without promoting either arm.",
+                             evidence, self.last_ts, outcome="split_retained")
             return
         winner = b if better is rb else a
         current = self.current_config(wid)

@@ -147,16 +147,34 @@ def _assert_rollback_requested(controller, wf, captured, expected_reason):
     assert expected_reason in json.loads(row[0])["no_winner_reason"]
 
 
-def test_inconclusive_experiment_proposes_incumbent_rollback(tmp_path):
+def test_inconclusive_experiment_keeps_split_without_proposal(tmp_path):
     controller, wf, captured = _controller_with_experiment(
-        tmp_path, v1_connected=500, v1_engaged=250, v2_connected=500, v2_engaged=250)
-    _assert_rollback_requested(controller, wf, captured, "primary_not_significant")
+        tmp_path, v1_connected=1000, v1_engaged=500, v2_connected=1000, v2_engaged=500)
+    controller.evaluate_experiment(wf)
+    exp = controller.store.get("experiment:wf")
+    assert exp["phase"] == "complete_inconclusive"
+    assert exp["proposal_id"] == "split-proposal"
+    assert captured == {}
+    assert controller.store.db.execute(
+        "SELECT count(*) FROM proposals").fetchone()[0] == 0
+    row = controller.store.db.execute(
+        "SELECT evidence FROM decisions WHERE action='experiment_no_winner_split_retained'").fetchone()
+    evidence = json.loads(row[0])
+    assert evidence["no_winner_reason"] == ["primary_not_significant"]
+    assert set(evidence["arms"]) == {"V1", "V2"}
+    assert evidence["guardrail_lower_bound_95pct_one_sided"] >= evidence["guardrail_floor"]
 
 
 def test_guardrail_failure_proposes_incumbent_rollback(tmp_path):
     controller, wf, captured = _controller_with_experiment(
         tmp_path, v1_connected=900, v1_engaged=540, v2_connected=700, v2_engaged=600)
     _assert_rollback_requested(controller, wf, captured, "guardrail_bound_failed")
+
+
+def test_significantly_worse_candidate_proposes_incumbent_rollback(tmp_path):
+    controller, wf, captured = _controller_with_experiment(
+        tmp_path, v1_connected=900, v1_engaged=600, v2_connected=900, v2_engaged=450)
+    _assert_rollback_requested(controller, wf, captured, "candidate_significantly_worse")
 
 
 def _caller_id_controller(tmp_path, windows):
