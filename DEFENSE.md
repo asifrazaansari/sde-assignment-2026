@@ -39,16 +39,17 @@
 
 ### Guardrail lower bound
 
-- **What:** A primary winner is promoted only when the one-sided 95% lower bound for guardrail difference clears the workflow's configured drop limit.
-- **Why:** A noisy point estimate can hide harm; the API's guardrail value is used rather than a hard-coded business rule.
+- **What:** Compute `guardrail_delta = candidate_rate - incumbent_rate`, with the standard error from those same candidate and incumbent arm rates and denominators. A primary winner is promoted only when the one-sided 95% lower bound clears the workflow's configured drop limit. `guardrail_failed` means that candidate-relative lower bound is below `-guardrail_drop`.
+- **Why:** A noisy point estimate can hide harm; the API's guardrail value is used rather than a hard-coded business rule. The prior implementation incorrectly ordered guardrail arms using the primary point estimate, which could flip the sign and spuriously fail the guardrail. This was the rollback regression; it is covered by a test where pickup's incumbent edge is noise but candidate engagement is clearly better.
 - **Alternative rejected:** A simple `rate difference > -2%` check was too sensitive to sampling noise.
 - **If the constraint changes:** For small rates or clustered people, replace the normal bound with a method that models the actual sampling design.
 
 ### No-winner and rollback rule
 
 - **What:** Promote only when the candidate is statistically significant in the better direction on the primary KPI and clears the configured guardrail. A failed guardrail or a significantly worse primary result requests an approved rollback to the incumbent. When the primary is inconclusive and the guardrail passes, mark `complete_inconclusive`, audit `experiment_no_winner_split_retained` with full evidence, create no proposal, and keep the approved split.
-- **Why:** Inconclusive evidence is not evidence that the candidate is worse; a rollback itself changes production allocation and needs evidence. Neither arm is promoted without significance. The fresh grades nevertheless show the remaining risk: the approved nw_kyc incumbent rollback was harmful on engagement by −3.2% in public_01 and −2.1% in public_02.
+- **Why:** Inconclusive evidence is not evidence that the candidate is worse; a rollback itself changes production allocation and needs evidence. Neither arm is promoted without significance. After fixing the sign bug, fresh grades still mark the approved nw_kyc incumbent rollback harmful on engagement by −3.2% in public_01 and −2.1% in public_02. The audit now shows different triggers: public_01's candidate guardrail passed (delta +0.0676, lower bound +0.0190) but pickup was significantly worse (p=0.01133 < alpha 0.0166667); public_02's engagement point delta was +0.0116 but its lower bound −0.0381 failed the −0.02 limit, while pickup was inconclusive (p=0.532928).
 - **Known weakness:** A retained split is still a live, potentially poor allocation. A finite run can end while exploration remains in place, and the current controller has no bounded stopping policy for it.
+- **Treatment limitation:** For pickup-primary workflows such as KYC, a voice experiment appears to move engagement (the guardrail) more than pickup (the primary KPI). This dimension may be poorly aligned with the optimization target.
 - **Alternative rejected:** Promoting either arm without significance overstates the evidence. Applying a rollback directly would bypass governance.
 - **If the constraint changes:** Define an approved, bounded exploration window and a statistically justified stop policy; continue to route any rollback through governance.
 
@@ -98,7 +99,7 @@
 
 **Why not call V2 a winner in Northwind KYC when engagement rose?**
 
-Northwind KYC's primary metric is pickup. The controller promotes only if pickup is significantly better and the engagement guardrail passes. If pickup is inconclusive while the guardrail passes, it records `complete_inconclusive`, retains the split, and does not promote either arm. If the guardrail fails or pickup is significantly worse, it requests an approved rollback. The latest fresh grades mark the applied nw_kyc incumbent rollback harmful on engagement in public_01 (−3.2%) and public_02 (−2.1%); this shows that a rule-triggered, approved fallback can still worsen a measured outcome.
+Northwind KYC's primary metric is pickup. Guardrail delta is always candidate minus incumbent, regardless of which arm has the higher pickup point estimate; the lower bound uses those same arms. The original bug selected guardrail subtraction order from the primary estimate, which could make a better candidate guardrail look worse. That sign bug is fixed. The current fresh audits show public_01 rolled back for a significantly worse pickup result while the guardrail passed, and public_02 rolled back because the corrected guardrail lower bound still crossed its drop limit. Both approved rollbacks remain graded harmful on engagement (−3.2% and −2.1%). Voice itself appears to move KYC engagement more than its pickup objective, a limitation of this experiment choice.
 
 **What happens when the experiment is inconclusive?**
 
