@@ -1,10 +1,10 @@
-Starting public_01 simulator at http://127.0.0.1:51237; run_dir=runs/crash_recovery.hvt3Up/simulator
-kill point 1 before SIGKILL (pending proposal=ctl-e1a93c5a1815a1f583a05a2c approval=apr_00001): cursor=12, proposals={'applied': 1, 'pending': 2}
+Starting public_01 simulator at http://127.0.0.1:52524; run_dir=runs/crash_recovery.wBefWo/simulator
+kill point 1 before SIGKILL (pending proposal=ctl-e1a93c5a1815a1f583a05a2c approval=apr_00001): cursor=9, proposals={'pending': 2}
 kill point 1: controller killed while approval was pending
-cursor at restart: 12 -> 12
-{"status": "finished", "timestamp": "2027-01-12T00:00:00+05:30", "chunk_cursor": 392, "credits_remaining": 200.0, "ingested_events": 104051, "ingest_events_per_second": 65143.2, "max_event_lag_sim_minutes": 30.0, "wall_seconds": 18.79}
+cursor at restart: 9 -> 9
+{"status": "finished", "timestamp": "2027-01-12T00:00:00+05:30", "chunk_cursor": 392, "credits_remaining": 200.0, "ingested_events": 104731, "ingest_events_per_second": 61039.1, "max_event_lag_sim_minutes": 25.0, "wall_seconds": 29.71}
 kill point 2 unreachable on public_01: no approved-but-unapplied approval was observed before the controller finished
-final cursor=392; proposal states={'applied': 3}
-apply records=3 unique approval IDs=3 duplicate applies=0
+final cursor=392; proposal states={'applied': 5}
+apply records=5 unique approval IDs=5 duplicate applies=0
 final simulator state: finished=True sim_minute=11520
 PASS: crash recovery assertions completed
