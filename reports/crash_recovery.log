@@ -1,0 +1,5 @@
+killed controller pid=10216 after 1s
+simulator finished at kill: False
+{"status": "finished", "timestamp": "2027-01-12T00:00:00+05:30", "chunk_cursor": 392, "credits_remaining": 200.0, "ingested_events": 95927, "ingest_events_per_second": 69439.9, "max_event_lag_sim_minutes": 27.0, "wall_seconds": 8.0}
+restart completed
+apply records=6 unique approval IDs=6 duplicate applies=0
